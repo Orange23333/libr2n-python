@@ -1,0 +1,3 @@
+# Full Name: Real Neuron Network Library for Python
+# Keywords: lib, py, r2n, real, neuron, neure, net, network
+libr2n
