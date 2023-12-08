@@ -2,6 +2,7 @@ from enum import Enum
 import math
 import matplotlib.axes
 import matplotlib.pyplot as plt
+import numpy as np
 import random
 from typing import Optional
 
@@ -100,7 +101,7 @@ class NeuronController:
         return rad
 
     def __k_to_rad(self, k: Optional[float, None]) -> Optional[float, None]:
-        if k is None:
+        if k is None: # Use float('inf') indecates 90deg. None means point is coincided.
             return None
         return math.atan(k)
 
@@ -133,7 +134,10 @@ class NeuronController:
             trend_power: float,
             trend_angle_rad: float
     ) -> list[float]:
+        normal_length_range = [3, 24]
         重写！！！
+        需要规定l范围来抑制轴/树突的收缩和生长。
+        rad将由每个轴/树突的某一侧的其他轴/树突的数量来抑制/促进旋转，即对面越多越抑制
 
         if trend_power < 1.0:
             raise ValueError('Trend power must be equals or greater than 1.0.')
@@ -144,12 +148,13 @@ class NeuronController:
         )
         if k is None:
             return [
-                math.cos(trend_angle_rad) * trend_power,
-                math.sin(trend_angle_rad) * trend_power
+                math.cos(trend_angle_rad) * origin_det_length * trend_power,
+                math.sin(trend_angle_rad) * origin_det_length * trend_power
             ]
         k_rad = self.__normalize_radian(math.atan(k))
         trend_angle_rad = self.__normalize_radian(trend_angle_rad)
 
+        growth_requirement = 这就需要提前缓存每一个突的rad
         # 实际上就是趋向单位向量在树/轴突上的投影的正则化。
         trend_similarity = (math.cos(self.__normalize_radian(k_rad - trend_angle_rad)) + 1.0) / 2.0
         # 以某种函数来处理正则化的数值为倍率，通常大于0，斜率在0.5附近突变。
@@ -167,8 +172,23 @@ class NeuronController:
         ]
 
     def do_tick(self, det_tick: float, trend_power: float, trend_angle_rad: float) -> None:
-        # Move entire neuron.
-        self.neuron.move(random.uniform(-1.0, 1.0) * det_tick, random.uniform(-1.0, 1.0) * det_tick, move_synapses=True)
+        # Don't move entire neuron, 因为存在粘滞力，所以细胞核的移动和突触关系不大。
+        # Move neuron core only.
+        self.neuron.move(random.uniform(-1.0, 1.0) * det_tick, random.uniform(-1.0, 1.0) * det_tick, move_synapses=False)
+
+        n = len(self.neuron.synapses)
+        center_point = self.neuron.coordinate
+        # 计算各个树/轴突与水平线之间夹角的弧度。
+        rad_table = np.zeros(n)
+        for i in range(0, n):
+            synapse = self.neuron.synapses[i]
+            k = (synapse.coordinate[1] - center_point[1])/(synapse.coordinate[0] - center_point[0])
+            rad_table[i] = math.atan(k)
+        # 计算各个树/轴突之间的角度差。
+        diff_rad_table = np.zeros((n, n))
+        for i in range(0, n):
+            for j in range(i, n):
+                diff_rad_table[i][j]=diff_rad_table[j][i]=
 
         # Move each synapse.
         for synapse in self.neuron.synapses:
