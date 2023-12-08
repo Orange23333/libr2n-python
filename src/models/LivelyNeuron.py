@@ -94,113 +94,142 @@ class NeuronController:
             return float('inf')
         return (origin_coordinate[1] - centre_coordinate[1]) / (origin_coordinate[0] - centre_coordinate[0])
 
-    def __normalize_radian(self, rad: float) -> float:
-        rad = rad % math.radians(360.0)
-        if rad < 0:
-            rad += math.radians(360.0)
-        return rad
+    def __normalize_radian(self, a: float) -> float:
+        a %= math.radians(360.0)
+        if a < 0:
+            a += math.radians(360.0)
+        return a
 
-    def __k_to_rad(self, k: Optional[float, None]) -> Optional[float, None]:
-        if k is None: # Use float('inf') indecates 90deg. None means point is coincided.
-            return None
-        return math.atan(k)
+    def __normalize_det_radian(self, a: float) -> float:
+        #a = self.__normalize_radian(a)
+        if a > math.pi:
+            return 2 * math.pi - a
+        elif a < -math.pi:
+            return 2 * math.pi + a
+        return a
 
-    def __expand_length(
-            self,
-            origin_coordinate: list[float],
-            centre_coordinate: list[float],
-            expand_length: float
-    ) -> list[float]:
-        k = self.__gradient(
-            origin_coordinate=origin_coordinate,
-            centre_coordinate=centre_coordinate
-        )
-        if k is None:
-            return [0, 0]
-        k_rad = math.atan(k)
-
-        # Return delta coordinate.
-        return [
-            expand_length * math.cos(k_rad),
-            expand_length * math.sin(k_rad)
-        ]
-
-    def __trend_angle(
-            self,
-            origin_coordinate: list[float],
-            centre_coordinate: list[float],
-            origin_det_length: float,
-            origin_det_rad: float,
-            trend_power: float,
-            trend_angle_rad: float
-    ) -> list[float]:
-        normal_length_range = [3, 24]
-        重写！！！
-        需要规定l范围来抑制轴/树突的收缩和生长。
-        rad将由每个轴/树突的某一侧的其他轴/树突的数量来抑制/促进旋转，即对面越多越抑制
+    def do_tick(self, det_tick: float, trend_power: float, trend_rad: float) -> None:
+        # 如何简单优化：加速=合并遍历；减少内存=重复利用数组。
 
         if trend_power < 1.0:
             raise ValueError('Trend power must be equals or greater than 1.0.')
 
-        k = self.__gradient(
-            origin_coordinate=origin_coordinate,
-            centre_coordinate=centre_coordinate
-        )
-        if k is None:
-            return [
-                math.cos(trend_angle_rad) * origin_det_length * trend_power,
-                math.sin(trend_angle_rad) * origin_det_length * trend_power
-            ]
-        k_rad = self.__normalize_radian(math.atan(k))
-        trend_angle_rad = self.__normalize_radian(trend_angle_rad)
+        # 正则化趋向弧度。
+        #trend_rad %= math.pi * 2.0
+        #if trend_rad < 0.0:
+        #    trend_rad += math.pi * 2.0
+        if trend_rad < 0.0 or math.pi * 2.0 <= trend_rad:
+            raise ValueError('Trend rad must be between 0.0 and 2*pi (include 0.0, but without'
+                             '30 2*pi).')
 
-        growth_requirement = 这就需要提前缓存每一个突的rad
-        # 实际上就是趋向单位向量在树/轴突上的投影的正则化。
-        trend_similarity = (math.cos(self.__normalize_radian(k_rad - trend_angle_rad)) + 1.0) / 2.0
-        # 以某种函数来处理正则化的数值为倍率，通常大于0，斜率在0.5附近突变。
-        ts_result_min = 0.1
-        trend_similarity = math.pow(trend_power + 1.0 - ts_result_min, trend_similarity) - (1.0 - ts_result_min)
-
-        trend = [
-            trend_similarity * math.cos(k_rad),
-            trend_similarity * math.sin(k_rad)
-        ]
-
-        # Return delta coordinate.
-        return [
-
-        ]
-
-    def do_tick(self, det_tick: float, trend_power: float, trend_angle_rad: float) -> None:
         # Don't move entire neuron, 因为存在粘滞力，所以细胞核的移动和突触关系不大。
         # Move neuron core only.
         self.neuron.move(random.uniform(-1.0, 1.0) * det_tick, random.uniform(-1.0, 1.0) * det_tick, move_synapses=False)
 
         n = len(self.neuron.synapses)
         center_point = self.neuron.coordinate
+
         # 计算各个树/轴突与水平线之间夹角的弧度。
         rad_table = np.zeros(n)
         for i in range(0, n):
             synapse = self.neuron.synapses[i]
-            k = (synapse.coordinate[1] - center_point[1])/(synapse.coordinate[0] - center_point[0])
-            rad_table[i] = math.atan(k)
+            if synapse.coordinate[0] == center_point[0]:
+                if synapse.coordinate[1] == center_point[1]:
+                    rad_table[i] = None
+                else:
+                    rad_table[i] = math.pi / 2
+            else:
+                k = (synapse.coordinate[1] - center_point[1])/(synapse.coordinate[0] - center_point[0])
+                rad_table[i] = math.atan(k)
+                if synapse.coordinate[1] < center_point[1] or (synapse.coordinate[1] == center_point[1] and synapse.coordinate[0] < center_point[0]):
+                    rad_table[i] += math.pi
+
         # 计算各个树/轴突之间的角度差。
         diff_rad_table = np.zeros((n, n))
         for i in range(0, n):
             for j in range(i, n):
-                diff_rad_table[i][j]=diff_rad_table[j][i]=
+                if rad_table[i] is None or rad_table[j] is None:
+                    diff_rad_table[i][j] = diff_rad_table[j][i] = None
+                else:
+                    diff_rad_table[i][j] = math.fabs(rad_table[i] - rad_table[j])
+                    diff_rad_table[i][j] = self.__normalize_det_radian(diff_rad_table[i][j])
+                    diff_rad_table[j][i] = -diff_rad_table[i][j] #因为后面用不到，所以这一步可以省略。
 
-        # Move each synapse.
-        for synapse in self.neuron.synapses:
-            det_l = random.uniform(-1.0, 1.0) * det_tick
-            det_rad = math.radians(0.01)
-            det_rad = random.uniform(-det_rad, det_rad)
-            det_coordinate = self.__trend_angle(
-                origin_coordinate=synapse.coordinate,
-                centre_coordinate=self.neuron.coordinate,
-                origin_det_length=det_l,
-                origin_det_rad=det_rad,
-                trend_power=trend_power,
-                trend_angle_rad=trend_angle_rad
-            )
-            synapse.move(det_coordinate[0], det_coordinate[1])
+        # 计算旋转倍率
+        rotate_rate_table = np.zeros(n)
+        for i in range(0, n):
+            if rad_table[i] is not None:
+                sum = 0.0
+                count = 0
+                for j in range(0, n):
+                    if diff_rad_table[i][j] is not None and diff_rad_table[i][j] != 0.0:
+                        if diff_rad_table[i][j] > 0.0:
+                            sum += math.pi - diff_rad_table[i][j]
+                        else:
+                            sum -= math.pi + diff_rad_table[i][j]
+                        count += 1
+                rotate_rate_table[i] = sum / math.pi / count #math.pi是最大绝对值。
+
+                curve_min = 0.0
+                curve_max = 2.0
+                if rotate_rate_table[i] >= 0.0:
+                    rotate_rate_table[i] = math.pow(curve_max - curve_min, (rotate_rate_table[i] - 0.5) * 2.0) + curve_min
+                else:
+                    rotate_rate_table[i] = -(math.pow(curve_max - curve_min, (rotate_rate_table[i] + 0.5) * -2.0) + curve_min)
+
+        normal_length_range = [3.0, 24.0]
+
+        # 计算树/轴突的长度。（之后可以用synapse.__l来缓存）
+        length_table = np.zeros(n)
+        for i in range(0, n):
+            synapse = self.neuron.synapses[i]
+            if synapse.coordinate[0] == center_point[0]:
+                if synapse.coordinate[1] == center_point[1]:
+                    length_table[i] = 0.0
+                else:
+                    length_table[i] = math.fabs(synapse.coordinate[1] - center_point[1])
+            else:
+                length_table[i] = math.fabs(synapse.coordinate[0] - center_point[0]) / math.cos(rad_table[i])
+
+        # 先旋转。
+        normal_det_rad = math.radians(0.01)
+        det_rad_max = math.radians(30.0)
+        for i in range(0, n):
+            synapse = self.neuron.synapses[i]
+            det_rad = random.uniform(0, normal_det_rad) * rotate_rate_table[i]
+            if det_rad > det_rad_max:
+                det_rad = det_rad_max
+            elif det_rad < -det_rad_max:
+                det_rad = -det_rad_max
+            rad_table[i] += det_rad
+            synapse.coordinate = [
+                center_point[0] + math.cos(rad_table[i]) * length_table[i],
+                center_point[1] + math.sin(rad_table[i]) * length_table[i]
+            ]
+
+        # 计算趋向不相似度。
+        trend_diff_table = np.zeros(n)
+        for i in range(0, n):
+            trend_diff_table[i] = trend_rad - rad_table[i]
+            trend_diff_table[i] = self.__normalize_det_radian(trend_diff_table[i]) / math.pi
+
+        # 计算生长倍率
+        growth_rate_table = np.zeros(n)
+        for i in range(0, n):
+            curve_min = 0.1
+            curve_max = 2.5
+            curve_a = 3
+            if trend_diff_table[i] >= 0.0:
+                growth_rate_table[i] = (
+                    (curve_max - curve_min) / 2 * math.pow((trend_diff_table[i] - 0.5) * 2.0, curve_a) +
+                    (curve_max - curve_min) / 2 + curve_min
+                )
+            else:
+                growth_rate_table[i] = -(
+                    (curve_max - curve_min) / 2 * math.pow((trend_diff_table[i] + 0.5) * -2.0, curve_a) +
+                    (curve_max - curve_min) / 2 + curve_min
+                )
+
+        for i in range(0, n):
+            corrected_length_range = [normal_length_range[0] * growth_rate_table[i], normal_length_range[1] * growth_rate_table[i]]
+            写到这里了。
